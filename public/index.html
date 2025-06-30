@@ -5,7 +5,7 @@
   <title>Sound Orbit</title>
   <style>
     body { margin: 0; overflow: hidden; background: #f0f0f0; }
-    canvas { display: block; background: white; }
+    canvas { display: block; background: black; }
     #colorPicker {
       position: absolute;
       top: 10px;
@@ -108,6 +108,13 @@
     socket.on("updateAll", (serverDots) => {
       dots = serverDots;
       userCount = Object.keys(serverDots).length;
+
+      for (const id in oscMap) {
+        if (!serverDots[id]) {
+        // オシレータとゲインを停止・切断
+          oscMap[id].gain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.05);
+        }
+      }
     });
 
     // 自分の点をサーバーに送信
