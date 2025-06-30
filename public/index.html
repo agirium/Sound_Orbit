@@ -5,7 +5,7 @@
   <title>Sound Orbit</title>
   <style>
     body { margin: 0; overflow: hidden; background: #f0f0f0; }
-    canvas { display: block; background: white; }
+    canvas { display: block; background: black; }
     #colorPicker {
       position: absolute;
       top: 10px;
@@ -138,7 +138,7 @@
         fy += dy * force;
       }
 
-      const ease = 0.05;
+      const ease = 0.02;
       selfDot.x += (selfDot.targetX - selfDot.x) * ease + fx * 0.001;
       selfDot.y += (selfDot.targetY - selfDot.y) * ease + fy * 0.001;
 
