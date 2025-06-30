@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Sound Orbit</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #f0f0f0; }
+    canvas { display: block; background: white; }
+    #colorPicker {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      width: 120px;
+      height: 40px;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <input type="color" id="colorPicker" value="#0000ff" title="点の色" />
+  <canvas id="canvas"></canvas>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const colorPicker = document.getElementById("colorPicker");
+
+    let center = { x: 0, y: 0 };
+    let radius = 0;
+    const ORBIT_COUNT = 5;
+    const orbitFrequencies = [261.63, 329.63, 392.00, 493.88, 587.33]; // ド, ミ, ソ, シ, レ
+    const orbitRadii = [];
+
+    let selfId = null;
+    let dots = {}; // { id: {x, y, color} }
+    let userCount = 1; // 動的に変わる接続ユーザー数（初期値1）
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscMap = {}; // id -> [oscillators]
+
+    function createOscillator(freq) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.value = 0;
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start();
+      return { osc, gain };
+    }
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      center = { x: canvas.width / 2, y: canvas.height / 2 };
+      radius = Math.min(canvas.width, canvas.height) * 0.4;
+      orbitRadii.length = 0;
+      for (let i = 1; i <= ORBIT_COUNT; i++) {
+        orbitRadii.push((radius / ORBIT_COUNT) * i);
+      }
+    }
+
+    window.addEventListener("resize", resizeCanvas);
+    resizeCanvas();
+
+    // 自分のドット
+    const selfDot = {
+      x: 0,
+      y: 0,
+      color: colorPicker.value,
+      targetX: 0,
+      targetY: 0
+    };
+
+    // 初期位置
+    selfDot.x = center.x;
+    selfDot.y = center.y;
+
+    colorPicker.addEventListener("input", () => {
+      selfDot.color = colorPicker.value;
+      socket.emit("color", selfDot.color);
+    });
+
+    canvas.addEventListener("mousemove", (e) => {
+      const dx = e.clientX - center.x;
+      const dy = e.clientY - center.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist <= radius) {
+        selfDot.targetX = e.clientX;
+        selfDot.targetY = e.clientY;
+      } else {
+        const angle = Math.atan2(dy, dx);
+        selfDot.targetX = center.x + radius * Math.cos(angle);
+        selfDot.targetY = center.y + radius * Math.sin(angle);
+      }
+    });
+
+    socket.on("connect", () => {
+      selfId = socket.id;
+      socket.emit("color", selfDot.color);
+    });
+
+    socket.on("updateAll", (serverDots) => {
+      dots = serverDots;
+      userCount = count || Object.keys(serverDots).length;
+    });
+
+    function sendPosition() {
+      const nx = (selfDot.x - center.x) / radius;
+      const ny = (selfDot.y - center.y) / radius;
+      socket.emit("move", { x: nx, y: ny });
+    }
+
+    function updateDotPositions() {
+      // 自分自身を他と斥力で分離
+      let fx = 0, fy = 0;
+
+
+      // 斥力の強さをユーザー数に反比例させる。最低1人の想定。
+      const baseForce = 200000;
+      const maxUsers = 100;
+      const strength = baseForce * (1 + (maxUsers - Math.min(userCount, maxUsers)) / maxUsers);
+
+      for (const id in dots) {
+        if (id === selfId) continue;
+        const other = dots[id];
+        const ox = center.x + other.x * radius;
+        const oy = center.y + other.y * radius;
+        const dx = selfDot.x - ox;
+        const dy = selfDot.y - oy;
+        const dist2 = dx * dx + dy * dy;
+        if (dist2 < 1) continue;
+        const force = strength  / dist2;
+        fx += dx * force;
+        fy += dy * force;
+      }
+
+      // イージング + 斥力反映
+      const ease = 0.05;
+      selfDot.x += (selfDot.targetX - selfDot.x) * ease + fx * 0.001;
+      selfDot.y += (selfDot.targetY - selfDot.y) * ease + fy * 0.001;
+
+      // 円内制限
+      const dx = selfDot.x - center.x;
+      const dy = selfDot.y - center.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > radius) {
+        const angle = Math.atan2(dy, dx);
+        selfDot.x = center.x + radius * Math.cos(angle);
+        selfDot.y = center.y + radius * Math.sin(angle);
+      }
+    }
+
+    function updateAudio() {
+      for (const id in dots) {
+        if (!oscMap[id]) {
+          oscMap[id] = orbitFrequencies.map(freq => createOscillator(freq));
+        }
+        const d = dots[id];
+        const px = center.x + d.x * radius;
+        const py = center.y + d.y * radius;
+        const dx = px - center.x;
+        const dy = py - center.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        orbitRadii.forEach((r, i) => {
+          const diff = Math.abs(dist - r);
+          const vol = diff < 50 ? (1 - diff / 50) * 0.3 : 0;
+          const pitchOffset = (diff < 50) ? (diff) * 0.6 : 0;
+          const freq = orbitFrequencies[i] - pitchOffset;
+
+          oscMap[id][i].gain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.05);
+          oscMap[id][i].osc.frequency.setTargetAtTime(freq, audioCtx.currentTime, 0.05);
+        });
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.lineWidth = 1;
+
+      const orbitHighlight = new Array(ORBIT_COUNT).fill(false);
+
+      for (const id in dots) {
+        const d = dots[id];
+        const px = center.x + d.x * radius;
+        const py = center.y + d.y * radius;
+        const dx = px - center.x;
+        const dy = py - center.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        orbitRadii.forEach((r, i) => {
+          if (Math.abs(dist - r) < 30) orbitHighlight[i] = true;
+        });
+      }
+
+      // 軌道
+      orbitRadii.forEach((r, i) => {
+        ctx.beginPath();
+        ctx.arc(center.x, center.y, r, 0, 2 * Math.PI);
+        ctx.strokeStyle = orbitHighlight[i] ? "orange" : "#ddd";
+        ctx.lineWidth = orbitHighlight[i] ? 3 : 1;
+        ctx.stroke();
+      });
+
+      // 他のユーザー
+      for (const id in dots) {
+        const d = dots[id];
+        const x = center.x + d.x * radius;
+        const y = center.y + d.y * radius;
+        ctx.beginPath();
+        ctx.arc(x, y, 6, 0, 2 * Math.PI);
+        ctx.fillStyle = d.color || "gray";
+        ctx.fill();
+      }
+
+      // 自分
+      ctx.beginPath();
+      ctx.arc(selfDot.x, selfDot.y, 8, 0, 2 * Math.PI);
+      ctx.fillStyle = selfDot.color;
+      ctx.fill();
+    }
+
+    function loop() {
+      updateDotPositions();
+      sendPosition();
+      updateAudio();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    window.addEventListener("click", () => {
+      if (audioCtx.state !== "running") {
+        audioCtx.resume();
+      }
+    });
+
+    loop();
+  </script>
+</body>
+</html>
