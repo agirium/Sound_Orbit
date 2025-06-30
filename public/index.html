@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>Sound Orbit</title>
   <style>
     body { margin: 0; overflow: hidden; background: #f0f0f0; }
@@ -34,12 +34,13 @@
     const orbitFrequencies = [261.63, 329.63, 392.00, 493.88, 587.33]; // ド, ミ, ソ, シ, レ
     const orbitRadii = [];
 
-    let selfId = null;
-    let dots = {}; // { id: {x, y, color} }
-    let userCount = 1; // 動的に変わる接続ユーザー数（初期値1）
+    let myId = null;
+    let dots = {};  // サーバーから送られてくる全ユーザーの点情報
+    let userCount = 1;
 
+    // Web Audio初期設定
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const oscMap = {}; // id -> [oscillators]
+    const oscMap = {}; // ユーザーID -> [オシレーター配列]
 
     function createOscillator(freq) {
       const osc = audioCtx.createOscillator();
@@ -52,6 +53,7 @@
       return { osc, gain };
     }
 
+    // キャンバスサイズ更新＆軌道半径計算
     function resizeCanvas() {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
@@ -62,28 +64,25 @@
         orbitRadii.push((radius / ORBIT_COUNT) * i);
       }
     }
-
     window.addEventListener("resize", resizeCanvas);
     resizeCanvas();
 
-    // 自分のドット
+    // 自分の点の状態
     const selfDot = {
-      x: 0,
-      y: 0,
+      x: center.x,
+      y: center.y,
       color: colorPicker.value,
-      targetX: 0,
-      targetY: 0
+      targetX: center.x,
+      targetY: center.y
     };
 
-    // 初期位置
-    selfDot.x = center.x;
-    selfDot.y = center.y;
-
+    // 色変更時
     colorPicker.addEventListener("input", () => {
       selfDot.color = colorPicker.value;
       socket.emit("color", selfDot.color);
     });
 
+    // マウス移動制御（円内に制限）
     canvas.addEventListener("mousemove", (e) => {
       const dx = e.clientX - center.x;
       const dy = e.clientY - center.y;
@@ -97,43 +96,36 @@
         selfDot.targetY = center.y + radius * Math.sin(angle);
       }
     });
-    
-    let myId = null;
-    let allDots = {};
 
-    socket.on("connect", () => {
-      selfId = socket.id;
-      socket.emit("color", selfDot.color);
-    });
+    // Socket.IO イベント
 
+    // 自分のIDを受け取る
     socket.on("init", (id) => {
       myId = id;
     });
 
+    // 全ユーザーの点情報更新
     socket.on("updateAll", (serverDots) => {
       dots = serverDots;
-      userCount = count || Object.keys(serverDots).length;
-      allDots = dots;
+      userCount = Object.keys(serverDots).length;
     });
 
+    // 自分の点をサーバーに送信
     function sendPosition() {
       const nx = (selfDot.x - center.x) / radius;
       const ny = (selfDot.y - center.y) / radius;
       socket.emit("move", { x: nx, y: ny });
     }
 
+    // 点の位置更新（斥力・イージング込み）
     function updateDotPositions() {
-      // 自分自身を他と斥力で分離
       let fx = 0, fy = 0;
-
-
-      // 斥力の強さをユーザー数に反比例させる。最低1人の想定。
       const baseForce = 200000;
       const maxUsers = 100;
       const strength = baseForce * (1 + (maxUsers - Math.min(userCount, maxUsers)) / maxUsers);
 
       for (const id in dots) {
-        if (id === selfId) continue;
+        if (id === myId) continue;
         const other = dots[id];
         const ox = center.x + other.x * radius;
         const oy = center.y + other.y * radius;
@@ -141,17 +133,16 @@
         const dy = selfDot.y - oy;
         const dist2 = dx * dx + dy * dy;
         if (dist2 < 1) continue;
-        const force = strength  / dist2;
+        const force = strength / dist2;
         fx += dx * force;
         fy += dy * force;
       }
 
-      // イージング + 斥力反映
       const ease = 0.05;
       selfDot.x += (selfDot.targetX - selfDot.x) * ease + fx * 0.001;
       selfDot.y += (selfDot.targetY - selfDot.y) * ease + fy * 0.001;
 
-      // 円内制限
+      // 円の中に制限
       const dx = selfDot.x - center.x;
       const dy = selfDot.y - center.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
@@ -162,6 +153,7 @@
       }
     }
 
+    // 音声の更新（軌道ごとの音量・ピッチ調整）
     function updateAudio() {
       for (const id in dots) {
         if (!oscMap[id]) {
@@ -177,7 +169,7 @@
         orbitRadii.forEach((r, i) => {
           const diff = Math.abs(dist - r);
           const vol = diff < 50 ? (1 - diff / 50) * 0.3 : 0;
-          const pitchOffset = (diff < 50) ? (diff) * 0.6 : 0;
+          const pitchOffset = diff < 50 ? diff * 0.6 : 0;
           const freq = orbitFrequencies[i] - pitchOffset;
 
           oscMap[id][i].gain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.05);
@@ -186,12 +178,15 @@
       }
     }
 
+    // 描画ループ
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.lineWidth = 1;
 
+      // 軌道がハイライトされているか判定
       const orbitHighlight = new Array(ORBIT_COUNT).fill(false);
 
+      // 軌道ハイライト用に全ユーザーの点をチェック
       for (const id in dots) {
         const d = dots[id];
         const px = center.x + d.x * radius;
@@ -199,12 +194,13 @@
         const dx = px - center.x;
         const dy = py - center.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
+
         orbitRadii.forEach((r, i) => {
           if (Math.abs(dist - r) < 30) orbitHighlight[i] = true;
         });
       }
 
-      // 軌道
+      // 軌道の描画
       orbitRadii.forEach((r, i) => {
         ctx.beginPath();
         ctx.arc(center.x, center.y, r, 0, 2 * Math.PI);
@@ -213,11 +209,11 @@
         ctx.stroke();
       });
 
-      // 他のユーザー
-      for (const id in allDots) {
-        if (id === myId) continue;   // 自分の点はスキップ
-        const d = allDots[id];
+      // 他のユーザーの点を描画（自分は除外）
+      for (const id in dots) {
+        if (id === myId) continue;
 
+        const d = dots[id];
         const x = center.x + d.x * radius;
         const y = center.y + d.y * radius;
         ctx.beginPath();
@@ -226,13 +222,14 @@
         ctx.fill();
       }
 
-      // 自分
+      // 自分の点を描画
       ctx.beginPath();
       ctx.arc(selfDot.x, selfDot.y, 8, 0, 2 * Math.PI);
       ctx.fillStyle = selfDot.color;
       ctx.fill();
     }
 
+    // メインループ
     function loop() {
       updateDotPositions();
       sendPosition();
@@ -241,6 +238,7 @@
       requestAnimationFrame(loop);
     }
 
+    // ユーザー操作でオーディオ開始（モバイル対応）
     window.addEventListener("click", () => {
       if (audioCtx.state !== "running") {
         audioCtx.resume();
