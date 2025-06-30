@@ -9,7 +9,7 @@ let dots = {}; // { id: { x, y, color } }
 io.on("connection", (socket) => {
   // 初期化
   dots[socket.id] = { x: 0, y: 0, color: "#0000ff" };
-
+  socket.emit("init", socket.id);
   // 座標の更新
   socket.on("move", (pos) => {
     if (dots[socket.id]) {

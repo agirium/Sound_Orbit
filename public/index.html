@@ -97,15 +97,23 @@
         selfDot.targetY = center.y + radius * Math.sin(angle);
       }
     });
+    
+    let myId = null;
+    let allDots = {};
 
     socket.on("connect", () => {
       selfId = socket.id;
       socket.emit("color", selfDot.color);
     });
 
+    socket.on("init", (id) => {
+      myId = id;
+    });
+
     socket.on("updateAll", (serverDots) => {
       dots = serverDots;
       userCount = count || Object.keys(serverDots).length;
+      allDots = dots;
     });
 
     function sendPosition() {
@@ -206,8 +214,10 @@
       });
 
       // 他のユーザー
-      for (const id in dots) {
-        const d = dots[id];
+      for (const id in allDots) {
+        if (id === myId) continue;   // 自分の点はスキップ
+        const d = allDots[id];
+
         const x = center.x + d.x * radius;
         const y = center.y + d.y * radius;
         ctx.beginPath();
