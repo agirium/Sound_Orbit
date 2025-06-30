@@ -245,6 +245,12 @@
       }
     });
 
+    window.addEventListener("touchstart", () => {
+      if (audioCtx.state !== "running") {
+    audioCtx.resume();
+  }
+}, { once: true });
+
     loop();
   </script>
 </body>
