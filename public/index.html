@@ -111,8 +111,15 @@
 
       for (const id in oscMap) {
         if (!serverDots[id]) {
-        // オシレータとゲインを停止・切断
-          oscMap[id].gain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.05);
+          // オシレータとゲインを停止・切断
+          oscMap[id].forEach(({ osc, gain }) => {
+            try {
+              osc.stop();
+            } catch (e) {}
+            osc.disconnect();
+            gain.disconnect();
+          });
+          delete oscMap[id];
         }
       }
     });
