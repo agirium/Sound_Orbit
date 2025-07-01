@@ -136,7 +136,7 @@
       let fx = 0, fy = 0;
       const baseForce = 200000;
       const maxUsers = 100;
-      const strength = baseForce * (1 + (maxUsers - Math.min(userCount, maxUsers)) / maxUsers);
+      const strength = baseForce * (1 + (maxUsers - Math.min(userCount, maxUsers)) / maxUsers / 2);
 
       for (const id in dots) {
         if (id === myId) continue;
