@@ -190,7 +190,7 @@
           }
         }
 
-        if (hasNeighbor && (performance.now() - lastTriggerTime[i]) > 500) {
+        if (hasNeighbor && (performance.now() - lastTriggerTime[i]) > 1000) {
           lastTriggerTime[i] = performance.now();
           vol *= 1.5;
           freq += 8;
