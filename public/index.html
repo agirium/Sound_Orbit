@@ -108,9 +108,9 @@
 
     // 共通のディレイ（リバーブ的）
     const globalDelay = audioCtx.createDelay();
-    globalDelay.delayTime.value = 0.3; // 300ms
+    globalDelay.delayTime.value = 0.4; // 300ms
     const feedback = audioCtx.createGain();
-    feedback.gain.value = 0.4;
+    feedback.gain.value = 0.3;
     globalDelay.connect(feedback).connect(globalDelay);
 
     // 出力
@@ -120,6 +120,7 @@
       if (!samples[i]) return;
       const source = audioCtx.createBufferSource();
       source.buffer = samples[i];
+      source.playbackRate.value = 1 + Math.random() * 0.5;
       source.connect(globalDelay);
       source.connect(audioCtx.destination); // ドライ音も
       source.start(0);
@@ -190,7 +191,7 @@
           }
         }
 
-        if (hasNeighbor && (performance.now() - lastTriggerTime[i]) > 1000) {
+        if (hasNeighbor && (performance.now() - lastTriggerTime[i]) > 500) {
           lastTriggerTime[i] = performance.now();
           vol *= 1.5;
           freq += 8;
