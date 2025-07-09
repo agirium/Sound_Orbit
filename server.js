@@ -1,318 +1,48 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8" />
-  <title>Sound Orbit</title>
-  <style>
-    body { margin: 0; overflow: hidden; background: #000; }
-    canvas { display: block; background: #333; }
-  </style>
-</head>
-<body>
-  <canvas id="canvas"></canvas>
+const express = require("express");
+const app = express();
+const http = require("http").createServer(app);
+const io = require("socket.io")(http);
+app.use(express.static("public")); // 公開ディレクトリ
 
-  <script src="/socket.io/socket.io.js"></script>
-  <script>
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
-    const socket = io();
+let dots = {}; // { id: { r, theta, color } }
 
-    let center = { x: 0, y: 0 };
-    let radius = 0;
-    const ORBIT_COUNT = 5;
-    const orbitRadii = [];
-    const orbitSpeeds = [0.00155, 0.00065, 0.00095, 0.00115, 0.0005];
-    const frequencies = [261.63, 329.63, 392.00, 493.88, 587.33];
-    const ripples = [];
+io.on("connection", (socket) => {
+  // 初期状態の登録（仮の値）
+  dots[socket.id] = {
+    r: 0.5,
+    theta: 0,
+    color: "#00aaff"
+  };
 
-    let myId = null;
-    let dots = {};
-
-    function getRandomColor() {
-      const hue = Math.floor(Math.random() * 360);
-      return `hsl(${hue}, 100%, 80%)`;
+  // クライアントから位置を受信
+  socket.on("move", (pos) => {
+    if (dots[socket.id]) {
+      dots[socket.id].r = pos.r;
+      dots[socket.id].theta = pos.theta;
     }
+  });
 
-    const selfDot = {
-      rNorm: 0,
-      theta: 0,
-      dr: 0,
-      dtheta: 0,
-      color: getRandomColor(),
-      orbitIndex: null
-    };
-
-    function resizeCanvas() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      center = { x: canvas.width / 2, y: canvas.height / 2 };
-      radius = Math.min(canvas.width, canvas.height) * 0.4;
-      orbitRadii.length = 0;
-      for (let i = 1; i <= ORBIT_COUNT; i++) {
-        orbitRadii.push(i / ORBIT_COUNT);
-      }
+  // 色の変更を受信
+  socket.on("color", (color) => {
+    if (dots[socket.id]) {
+      dots[socket.id].color = color;
     }
+  });
 
-    window.addEventListener("resize", resizeCanvas);
-    resizeCanvas();
+  // 切断時に削除
+  socket.on("disconnect", () => {
+    delete dots[socket.id];
+  });
 
-    canvas.addEventListener("click", (e) => {
-      const dx = e.clientX - center.x;
-      const dy = e.clientY - center.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      selfDot.dr = (dist / radius - selfDot.rNorm) / 19;
-      startBgmIfReady();  // BGMも同時に開始
-    });
+  // 自身の ID を通知
+  socket.emit("init", socket.id);
+});
 
-    socket.on("init", id => {
-      myId = id;
-      socket.emit("color", selfDot.color);
-    });
+// 全クライアントに 20fps でデータ送信
+setInterval(() => {
+  io.emit("updateAll", dots);
+}, 50);
 
-    socket.on("updateAll", serverDots => {
-      for (const id in serverDots) {
-        if (!dots[id]) {
-          dots[id] = {
-            r: serverDots[id].r,
-            theta: serverDots[id].theta,
-            targetR: serverDots[id].r,
-            targetTheta: serverDots[id].theta,
-            color: serverDots[id].color
-          };
-        }
-        dots[id].targetR = serverDots[id].r;
-        dots[id].targetTheta = serverDots[id].theta;
-        dots[id].color = serverDots[id].color;
-      }
-    });
-
-    function sendPosition() {
-      socket.emit("move", {
-        r: selfDot.rNorm,
-        theta: selfDot.theta
-      });
-    }
-
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const oscMap = {};
-    const lastTriggerTime = Array(ORBIT_COUNT).fill(0);
-
-    // 効果音
-    const samples = [];
-    const sampleUrls = ["/sample1.wav", "/sample2.wav", "/sample3.wav", "/sample4.wav", "/sample5.wav"];
-    Promise.all(sampleUrls.map(url =>
-      fetch(url).then(res => res.arrayBuffer()).then(buf => audioCtx.decodeAudioData(buf))
-    )).then(buffers => {
-      for (let i = 0; i < buffers.length; i++) samples[i] = buffers[i];
-    });
-
-    // 共通のディレイ（リバーブ的）
-    const globalDelay = audioCtx.createDelay();
-    globalDelay.delayTime.value = 0.3; // 300ms
-    const feedback = audioCtx.createGain();
-    feedback.gain.value = 0.4;
-    globalDelay.connect(feedback).connect(globalDelay);
-
-    // 出力
-    globalDelay.connect(audioCtx.destination);
-
-    function playSample(i) {
-      if (!samples[i]) return;
-      const source = audioCtx.createBufferSource();
-      source.buffer = samples[i];
-      source.connect(globalDelay);
-      source.connect(audioCtx.destination); // ドライ音も
-      source.start(0);
-    }
-
-    // BGMをあらかじめdecode
-    let bgmBuffer = null;
-    fetch("/bgm.mp3")
-      .then(res => res.arrayBuffer())
-      .then(buf => audioCtx.decodeAudioData(buf))
-      .then(decoded => {
-        bgmBuffer = decoded;
-      });
-
-    function startBgmIfReady() {
-      if (!bgmBuffer) return;
-      audioCtx.resume().then(() => {
-        const bgmSource = audioCtx.createBufferSource();
-        bgmSource.buffer = bgmBuffer;
-        bgmSource.loop = true;
-        const gainNode = audioCtx.createGain();
-        gainNode.gain.value = 1.0;
-        bgmSource.connect(gainNode).connect(audioCtx.destination);
-        bgmSource.start(0);
-      });
-    }
-
-    function getOrCreateOscillators(id) {
-      if (!oscMap[id]) {
-        oscMap[id] = frequencies.map(freq => {
-          const osc = audioCtx.createOscillator();
-          const gain = audioCtx.createGain();
-          osc.type = "sine";
-          gain.gain.value = 0;
-          osc.connect(gain).connect(audioCtx.destination);
-          osc.start();
-          return { osc, gain };
-        });
-      }
-      return oscMap[id];
-    }
-
-    function processAudioForDot(dot, id, now) {
-      const orbitTol = 0.03;
-      const angleTol = 0.15;
-      const oscs = getOrCreateOscillators(id);
-
-      for (let i = 0; i < ORBIT_COUNT; i++) {
-        const targetR = orbitRadii[i];
-        const diff = Math.abs(dot.r - targetR);
-        let vol = diff < 0.05 ? (1 - diff / 0.05) * 0.1 : 0;
-        let pitchOffset = diff < 0.05 ? diff * 60 : 0;
-        let freq = frequencies[i] - pitchOffset;
-        const lfo = Math.sin(now * 5) * 1;
-
-        let hasNeighbor = false;
-        if (diff < orbitTol) {
-          for (const id2 in dots) {
-            if (id2 === id) continue;
-            const d2 = dots[id2];
-            const neighborOrbitR = [orbitRadii[i - 1], orbitRadii[i + 1]].filter(Boolean);
-            const angleDiff = Math.abs(((d2.theta - dot.theta + Math.PI) % (2 * Math.PI)) - Math.PI);
-            const onAdjacent = neighborOrbitR.some(r => Math.abs(d2.r - r) < orbitTol);
-            if (onAdjacent && angleDiff < angleTol) {
-              hasNeighbor = true;
-              break;
-            }
-          }
-        }
-
-        if (hasNeighbor && (performance.now() - lastTriggerTime[i]) > 500) {
-          lastTriggerTime[i] = performance.now();
-          vol *= 1.5;
-          freq += 8;
-          const px = center.x + dot.r * radius * Math.cos(dot.theta);
-          const py = center.y + dot.r * radius * Math.sin(dot.theta);
-          ripples.push({ x: px, y: py, radius: 10, alpha: 0.6 });
-          playSample(i);
-        }
-
-        oscs[i].gain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.05);
-        oscs[i].osc.frequency.setTargetAtTime(freq + lfo, audioCtx.currentTime, 0.05);
-      }
-    }
-
-    function updateAudio() {
-      const now = performance.now() / 1000;
-      for (const id in dots) {
-
-        processAudioForDot(dots[id], id, now);
-      }
-      processAudioForDot({ r: selfDot.rNorm, theta: selfDot.theta }, myId, now);
-    }
-
-    function drawRipples() {
-      for (let i = ripples.length - 1; i >= 0; i--) {
-        const r = ripples[i];
-        ctx.beginPath();
-        ctx.arc(r.x, r.y, r.radius, 0, 2 * Math.PI);
-        ctx.strokeStyle = `rgba(0, 200, 255, ${r.alpha})`;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        r.radius += 1.2;
-        r.alpha -= 0.01;
-        if (r.alpha <= 0) ripples.splice(i, 1);
-      }
-    }
-
-    function updateDotPosition() {
-      selfDot.dr *= 0.95;
-      selfDot.dtheta *= 0.98;
-
-      selfDot.orbitIndex = null;
-      for (let i = 0; i < orbitRadii.length; i++) {
-        if (Math.abs(selfDot.rNorm - orbitRadii[i]) < 0.03) {
-          selfDot.dtheta -= orbitSpeeds[i];
-          selfDot.orbitIndex = i;
-          break;
-        }
-      }
-
-      selfDot.rNorm += selfDot.dr;
-      selfDot.rNorm = Math.max(0.02, Math.min(1, selfDot.rNorm));
-      selfDot.theta += selfDot.dtheta;
-
-      for (const id in dots) {
-        const d = dots[id];
-        if (d.targetR !== undefined) {
-          d.r += (d.targetR - d.r) * 0.2;
-          d.theta += (d.targetTheta - d.theta) * 0.2;
-        }
-      }
-    }
-
-    function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      const orbitHighlight = Array(ORBIT_COUNT).fill(false);
-      for (const id in dots) {
-        const d = dots[id];
-        for (let i = 0; i < ORBIT_COUNT; i++) {
-          if (Math.abs(d.r - orbitRadii[i]) < 0.03) {
-            orbitHighlight[i] = true;
-          }
-        }
-      }
-      for (let i = 0; i < ORBIT_COUNT; i++) {
-        if (Math.abs(selfDot.rNorm - orbitRadii[i]) < 0.03) {
-          orbitHighlight[i] = true;
-        }
-      }
-
-      orbitRadii.forEach((rNorm, i) => {
-        const r = rNorm * radius;
-        ctx.beginPath();
-        ctx.arc(center.x, center.y, r, 0, 2 * Math.PI);
-        ctx.strokeStyle = orbitHighlight[i] ? "white" : "#444";
-        ctx.lineWidth = orbitHighlight[i] ? 2 : 1;
-        ctx.stroke();
-      });
-
-      for (const id in dots) {
-        if (id === myId) continue;
-        const d = dots[id];
-        const r = d.r * radius;
-        const x = center.x + r * Math.cos(d.theta);
-        const y = center.y + r * Math.sin(d.theta);
-        ctx.beginPath();
-        ctx.arc(x, y, 6, 0, 2 * Math.PI);
-        ctx.fillStyle = d.color || "gray";
-        ctx.fill();
-      }
-
-      const r = selfDot.rNorm * radius;
-      const x = center.x + r * Math.cos(selfDot.theta);
-      const y = center.y + r * Math.sin(selfDot.theta);
-      ctx.beginPath();
-      ctx.arc(x, y, 8, 0, 2 * Math.PI);
-      ctx.fillStyle = selfDot.color;
-      ctx.fill();
-
-      drawRipples();
-    }
-
-    function loop() {
-      updateDotPosition();
-      updateAudio();
-      sendPosition();
-      draw();
-      requestAnimationFrame(loop);
-    }
-
-    loop();
-  </script>
-</body>
-</html>
+http.listen(3000, () => {
+  console.log("listening on http://localhost:3000");
+});
