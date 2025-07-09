@@ -21,7 +21,7 @@
     let radius = 0;
     const ORBIT_COUNT = 5;
     const orbitRadii = [];
-    const orbitSpeeds = [0.0031, 0.0013, 0.0019, 0.0023, 0.001];
+    const orbitSpeeds = [0.00155, 0.00065, 0.00095, 0.00115, 0.0005];
     const frequencies = [261.63, 329.63, 392.00, 493.88, 587.33];
     const ripples = [];
 
@@ -106,11 +106,22 @@
       for (let i = 0; i < buffers.length; i++) samples[i] = buffers[i];
     });
 
+    // 共通のディレイ（リバーブ的）
+    const globalDelay = audioCtx.createDelay();
+    globalDelay.delayTime.value = 0.3; // 300ms
+    const feedback = audioCtx.createGain();
+    feedback.gain.value = 0.4;
+    globalDelay.connect(feedback).connect(globalDelay);
+
+    // 出力
+    globalDelay.connect(audioCtx.destination);
+
     function playSample(i) {
       if (!samples[i]) return;
       const source = audioCtx.createBufferSource();
       source.buffer = samples[i];
-      source.connect(audioCtx.destination);
+      source.connect(globalDelay);
+      source.connect(audioCtx.destination); // ドライ音も
       source.start(0);
     }
 
@@ -151,7 +162,7 @@
       return oscMap[id];
     }
 
-    function processAudioForDot(dot, id, now, isSelf = false) {
+    function processAudioForDot(dot, id, now) {
       const orbitTol = 0.03;
       const angleTol = 0.15;
       const oscs = getOrCreateOscillators(id);
@@ -197,10 +208,10 @@
     function updateAudio() {
       const now = performance.now() / 1000;
       for (const id in dots) {
-        if (id === myId) continue;
+
         processAudioForDot(dots[id], id, now);
       }
-      processAudioForDot({ r: selfDot.rNorm, theta: selfDot.theta }, myId, now, true);
+      processAudioForDot({ r: selfDot.rNorm, theta: selfDot.theta }, myId, now);
     }
 
     function drawRipples() {
@@ -235,7 +246,6 @@
       selfDot.theta += selfDot.dtheta;
 
       for (const id in dots) {
-        if (id === myId) continue;
         const d = dots[id];
         if (d.targetR !== undefined) {
           d.r += (d.targetR - d.r) * 0.2;
@@ -249,7 +259,6 @@
 
       const orbitHighlight = Array(ORBIT_COUNT).fill(false);
       for (const id in dots) {
-        if (id === myId) continue;
         const d = dots[id];
         for (let i = 0; i < ORBIT_COUNT; i++) {
           if (Math.abs(d.r - orbitRadii[i]) < 0.03) {
