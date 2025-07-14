@@ -140,7 +140,7 @@
     orbitDelay.connect(audioCtx.destination);
 
     const samples = [];
-    const sampleUrls = ["/sample1.wav", "/sample2.wav", "/sample3.wav", "/sample4.wav", "/sample5.wav"];
+    const sampleUrls = ["/sample1.wav", "/sample2.wav", "/sample3.wav", "/sample4.wav", "/sample6.wav"];
     Promise.all(sampleUrls.map(url =>
       fetch(url).then(res => res.arrayBuffer()).then(buf => audioCtx.decodeAudioData(buf))
     )).then(buffers => {
