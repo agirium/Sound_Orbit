@@ -5,10 +5,23 @@
   <title>Sound Orbit</title>
   <style>
     body { margin: 0; overflow: hidden; background: #000; }
-    canvas { display: block; background: #333; }
+    #logo {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 40vw;
+      max-width: 400px;
+      z-index: 10;
+    }
+    canvas {
+      display: block;
+      background: #000;
+    }
   </style>
 </head>
 <body>
+  <img id="logo" src="image.png" alt="SoundOrbit Logo" />
   <canvas id="canvas"></canvas>
 
   <script src="/socket.io/socket.io.js"></script>
@@ -21,15 +34,41 @@
     let radius = 0;
     const ORBIT_COUNT = 5;
     const orbitRadii = [];
-    const orbitSpeeds = [0.00155, 0.00065, 0.00095, 0.00115, 0.0005];
-    const frequencies = [261.63, 329.63, 392.00, 493.88, 587.33];
+    const orbitSpeeds = [0.0005, 0.0007, 0.0006, 0.0005, 0.0003];
     const ripples = [];
 
     let myId = null;
     let dots = {};
 
-    function getRandomColor() {
-      const hue = Math.floor(Math.random() * 360);
+    // === コード進行 ===
+    const chordProgression = [
+      [164.8, 261.6, 392.0, 493.9, 784.0], 
+      [196.0, 329.6, 392.0, 493.9, 659.3], 
+      [220.0, 293.7, 392.0, 493.9, 587.3], 
+      [196.0, 329.6, 440.0, 523.3, 659.3], 
+      [220.0, 349.2, 523.3, 659.3, 1046.5],
+      [261.6, 440.0, 523.3, 659.3, 784.0],
+      [293.7, 349.2, 440.0, 523.3, 587.3],
+      [220.0, 293.7, 440.0, 523.3, 659.3]
+    ];
+    let chordIndex = 0;
+    let frequencies = chordProgression[chordIndex];
+
+    setInterval(() => {
+      chordIndex = (chordIndex + 1) % chordProgression.length;
+      frequencies = chordProgression[chordIndex];
+    }, 2000);
+
+    // === ユーザーカラー ===
+    const usedHues = [];
+    function getDistinctColor() {
+      let hue;
+      if (usedHues.length < 12) {
+        hue = (usedHues.length * 30) % 360;
+      } else {
+        hue = Math.floor(Math.random() * 360);
+      }
+      usedHues.push(hue);
       return `hsl(${hue}, 100%, 80%)`;
     }
 
@@ -38,7 +77,7 @@
       theta: 0,
       dr: 0,
       dtheta: 0,
-      color: getRandomColor(),
+      color: getDistinctColor(),
       orbitIndex: null
     };
 
@@ -52,7 +91,6 @@
         orbitRadii.push(i / ORBIT_COUNT);
       }
     }
-
     window.addEventListener("resize", resizeCanvas);
     resizeCanvas();
 
@@ -61,14 +99,10 @@
       const dy = e.clientY - center.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       selfDot.dr = (dist / radius - selfDot.rNorm) / 19;
-      startBgmIfReady();  // BGMも同時に開始
+      startBgmIfReady();
     });
 
-    socket.on("init", id => {
-      myId = id;
-      socket.emit("color", selfDot.color);
-    });
-
+    socket.on("init", id => { myId = id; });
     socket.on("updateAll", serverDots => {
       for (const id in serverDots) {
         if (!dots[id]) {
@@ -87,17 +121,24 @@
     });
 
     function sendPosition() {
-      socket.emit("move", {
-        r: selfDot.rNorm,
-        theta: selfDot.theta
-      });
+      socket.emit("move", { r: selfDot.rNorm, theta: selfDot.theta });
     }
 
+    // === Audio ===
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const oscMap = {};
+    const SAMPLE_COOLDOWN = 3000;
     const lastTriggerTime = Array(ORBIT_COUNT).fill(0);
 
-    // 効果音
+    const ORBIT_VOLUME = 0.05;
+
+    const orbitDelay = audioCtx.createDelay();
+    orbitDelay.delayTime.value = 0.5;
+    const orbitFeedback = audioCtx.createGain();
+    orbitFeedback.gain.value = 0.1;
+    orbitDelay.connect(orbitFeedback).connect(orbitDelay);
+    orbitDelay.connect(audioCtx.destination);
+
     const samples = [];
     const sampleUrls = ["/sample1.wav", "/sample2.wav", "/sample3.wav", "/sample4.wav", "/sample5.wav"];
     Promise.all(sampleUrls.map(url =>
@@ -106,57 +147,56 @@
       for (let i = 0; i < buffers.length; i++) samples[i] = buffers[i];
     });
 
-    // 共通のディレイ（リバーブ的）
-    const globalDelay = audioCtx.createDelay();
-    globalDelay.delayTime.value = 0.4; // 300ms
-    const feedback = audioCtx.createGain();
-    feedback.gain.value = 0.3;
-    globalDelay.connect(feedback).connect(globalDelay);
-
-    // 出力
-    globalDelay.connect(audioCtx.destination);
-
     function playSample(i) {
       if (!samples[i]) return;
       const source = audioCtx.createBufferSource();
       source.buffer = samples[i];
       source.playbackRate.value = 1 + Math.random() * 0.5;
-      source.connect(globalDelay);
-      source.connect(audioCtx.destination); // ドライ音も
+
+      const gainNode = audioCtx.createGain();
+      gainNode.gain.value = 0.4;
+
+      source.connect(gainNode);
+      gainNode.connect(orbitDelay);
+      gainNode.connect(audioCtx.destination);
       source.start(0);
     }
 
-    // BGMをあらかじめdecode
     let bgmBuffer = null;
+    let bgmIsPlaying = false;
     fetch("/bgm.mp3")
       .then(res => res.arrayBuffer())
       .then(buf => audioCtx.decodeAudioData(buf))
-      .then(decoded => {
-        bgmBuffer = decoded;
-      });
+      .then(decoded => { bgmBuffer = decoded; });
 
     function startBgmIfReady() {
-      if (!bgmBuffer) return;
+      if (!bgmBuffer || bgmIsPlaying) return;
       audioCtx.resume().then(() => {
         const bgmSource = audioCtx.createBufferSource();
         bgmSource.buffer = bgmBuffer;
         bgmSource.loop = true;
-        const gainNode = audioCtx.createGain();
-        gainNode.gain.value = 1.0;
-        bgmSource.connect(gainNode).connect(audioCtx.destination);
+        bgmSource.connect(audioCtx.destination);
         bgmSource.start(0);
+        bgmIsPlaying = true;
       });
     }
 
     function getOrCreateOscillators(id) {
       if (!oscMap[id]) {
-        oscMap[id] = frequencies.map(freq => {
+        oscMap[id] = frequencies.map(() => {
           const osc = audioCtx.createOscillator();
+          osc.type = "triangle";
+
+          const filter = audioCtx.createBiquadFilter();
+          filter.type = "lowpass";
+          filter.frequency.value = 1200;
+
           const gain = audioCtx.createGain();
-          osc.type = "sine";
           gain.gain.value = 0;
-          osc.connect(gain).connect(audioCtx.destination);
+
+          osc.connect(filter).connect(gain).connect(orbitDelay);
           osc.start();
+
           return { osc, gain };
         });
       }
@@ -171,10 +211,10 @@
       for (let i = 0; i < ORBIT_COUNT; i++) {
         const targetR = orbitRadii[i];
         const diff = Math.abs(dot.r - targetR);
-        let vol = diff < 0.05 ? (1 - diff / 0.05) * 0.1 : 0;
+        const lfo = (Math.sin(now * 6 + i) + 1) / 2;
+        let vol = diff < 0.05 ? (1 - diff / 0.05) * ORBIT_VOLUME * (0.1 + 0.9 * lfo) : 0;
         let pitchOffset = diff < 0.05 ? diff * 60 : 0;
         let freq = frequencies[i] - pitchOffset;
-        const lfo = Math.sin(now * 5) * 1;
 
         let hasNeighbor = false;
         if (diff < orbitTol) {
@@ -191,7 +231,7 @@
           }
         }
 
-        if (hasNeighbor && (performance.now() - lastTriggerTime[i]) > 500) {
+        if (hasNeighbor && (performance.now() - lastTriggerTime[i]) > SAMPLE_COOLDOWN) {
           lastTriggerTime[i] = performance.now();
           vol *= 1.5;
           freq += 8;
@@ -202,16 +242,13 @@
         }
 
         oscs[i].gain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.05);
-        oscs[i].osc.frequency.setTargetAtTime(freq + lfo, audioCtx.currentTime, 0.05);
+        oscs[i].osc.frequency.setTargetAtTime(freq, audioCtx.currentTime, 0.05);
       }
     }
 
     function updateAudio() {
       const now = performance.now() / 1000;
-      for (const id in dots) {
-
-        processAudioForDot(dots[id], id, now);
-      }
+      for (const id in dots) processAudioForDot(dots[id], id, now);
       processAudioForDot({ r: selfDot.rNorm, theta: selfDot.theta }, myId, now);
     }
 
@@ -257,27 +294,23 @@
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
       const orbitHighlight = Array(ORBIT_COUNT).fill(false);
+
       for (const id in dots) {
         const d = dots[id];
         for (let i = 0; i < ORBIT_COUNT; i++) {
-          if (Math.abs(d.r - orbitRadii[i]) < 0.03) {
-            orbitHighlight[i] = true;
-          }
+          if (Math.abs(d.r - orbitRadii[i]) < 0.03) orbitHighlight[i] = true;
         }
       }
       for (let i = 0; i < ORBIT_COUNT; i++) {
-        if (Math.abs(selfDot.rNorm - orbitRadii[i]) < 0.03) {
-          orbitHighlight[i] = true;
-        }
+        if (Math.abs(selfDot.rNorm - orbitRadii[i]) < 0.03) orbitHighlight[i] = true;
       }
 
       orbitRadii.forEach((rNorm, i) => {
         const r = rNorm * radius;
         ctx.beginPath();
         ctx.arc(center.x, center.y, r, 0, 2 * Math.PI);
-        ctx.strokeStyle = orbitHighlight[i] ? "white" : "#444";
+        ctx.strokeStyle = orbitHighlight[i] ? "white" : "#888";
         ctx.lineWidth = orbitHighlight[i] ? 2 : 1;
         ctx.stroke();
       });
@@ -289,7 +322,7 @@
         const x = center.x + r * Math.cos(d.theta);
         const y = center.y + r * Math.sin(d.theta);
         ctx.beginPath();
-        ctx.arc(x, y, 6, 0, 2 * Math.PI);
+        ctx.arc(x, y, 10, 0, 2 * Math.PI);
         ctx.fillStyle = d.color || "gray";
         ctx.fill();
       }
@@ -298,7 +331,7 @@
       const x = center.x + r * Math.cos(selfDot.theta);
       const y = center.y + r * Math.sin(selfDot.theta);
       ctx.beginPath();
-      ctx.arc(x, y, 8, 0, 2 * Math.PI);
+      ctx.arc(x, y, 12, 0, 2 * Math.PI);
       ctx.fillStyle = selfDot.color;
       ctx.fill();
 
