@@ -157,7 +157,7 @@
       gainNode.gain.value = 0.4;
 
       source.connect(gainNode);
-      gainNode.connect(orbitDelay);
+    //  gainNode.connect(orbitDelay);
       gainNode.connect(audioCtx.destination);
       source.start(0);
     }
@@ -185,7 +185,7 @@
       if (!oscMap[id]) {
         oscMap[id] = frequencies.map(() => {
           const osc = audioCtx.createOscillator();
-          osc.type = "triangle";
+          osc.type = "sine";
 
           const filter = audioCtx.createBiquadFilter();
           filter.type = "lowpass";
