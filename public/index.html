@@ -151,7 +151,7 @@
       if (!samples[i]) return;
       const source = audioCtx.createBufferSource();
       source.buffer = samples[i];
-      source.playbackRate.value = 1 + Math.random() * 0.5;
+      source.playbackRate.value = 1 + Math.random() * 0;
 
       const gainNode = audioCtx.createGain();
       gainNode.gain.value = 0.4;
